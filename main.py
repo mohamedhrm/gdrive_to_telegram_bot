@@ -89,14 +89,4 @@ async def download_folder(folder_url, context):
                     if chunk:
                         f.write(chunk)
 
-            await context.bot.send_document(chat_id=CHANNEL_ID, document=open(file_path, "rb"), filename=filename)
-            os.remove(file_path)
-
-    except Exception as e:
-        print("Error downloading folder:", e)
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء تحميل الفولدر.")
-
-def extract_file_id(url):
-    if "id=" in url:
-        return url.split("id=")[-1]
-    elif "/d/"
+            await context.bot.send_document(chat_id=CHANNEL_ID, document=open(file_path, "rb"), filename=filename
