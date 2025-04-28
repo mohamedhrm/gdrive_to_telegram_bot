@@ -1,11 +1,12 @@
 import os
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from bs4 import BeautifulSoup
+import json
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = os.environ.get("CHANNEL_ID")  # Example: '-1002558520064'
+CHANNEL_ID = os.environ.get("CHANNEL_ID")  # مثال: '-1002558520064'
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("أرسل رابط Google Drive 📂")
@@ -26,6 +27,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def download_file(url, context):
     try:
         file_id = extract_file_id(url)
+        if not file_id:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ لم أستطع استخراج معرف الملف.")
+            return
+
         download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
         session = requests.Session()
         response = session.get(download_url, stream=True)
@@ -42,17 +47,20 @@ async def download_file(url, context):
                 if chunk:
                     f.write(chunk)
 
-        # إرسال الملف إلى القناة
         await context.bot.send_document(chat_id=CHANNEL_ID, document=open(file_path, "rb"), filename=filename)
         os.remove(file_path)
 
     except Exception as e:
         print("Error downloading file:", e)
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء التحميل.")
+        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء تحميل الملف.")
 
 async def download_folder(folder_url, context):
     try:
         folder_id = extract_folder_id(folder_url)
+        if not folder_id:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ لم أستطع استخراج معرف المجلد.")
+            return
+
         page_url = f"https://drive.google.com/drive/folders/{folder_id}"
         session = requests.Session()
         response = session.get(page_url)
@@ -61,15 +69,20 @@ async def download_folder(folder_url, context):
         scripts = soup.find_all("script")
 
         files = []
+        data = None
+
         for script in scripts:
             if "window['_DRIVE_ivd']" in script.text:
-                start = script.text.find("[[") 
+                start = script.text.find("[[")
                 end = script.text.find("]]") + 2
                 data = script.text[start:end]
                 break
 
-        # استخراج IDات الملفات وأسمائهم
-        import json
+        if not data:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ لم أتمكن من قراءة ملفات المجلد.")
+            return
+
+        # استخراج الملفات
         data = json.loads(data)
         for item in data:
             if len(item) > 3:
@@ -77,7 +90,7 @@ async def download_folder(folder_url, context):
                 filename = item[2]
                 files.append((file_id, filename))
 
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"📂 تم العثور على {len(files)} ملف داخل الفولدر. جاري التحميل...")
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"📂 تم العثور على {len(files)} ملف داخل المجلد. جاري التحميل...")
 
         for file_id, filename in files:
             download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
@@ -94,27 +107,30 @@ async def download_folder(folder_url, context):
 
     except Exception as e:
         print("Error downloading folder:", e)
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء تحميل الفولدر.")
+        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء تحميل المجلد.")
 
 def extract_file_id(url):
     if "id=" in url:
-        return url.split("id=")[-1]
-    elif "/d/" in url:  # إضافة الـ `:`
+        return url.split("id=")[-1].split("&")[0]
+    elif "/d/" in url:
         return url.split("/d/")[1].split("/")[0]
+    else:
+        return None
 
 def extract_folder_id(url):
     if "folders/" in url:
         return url.split("folders/")[1].split("?")[0]
+    else:
+        return None
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
-    app.add_handler(CommandHandler("folder", handle_message))
-    app.add_handler(CommandHandler("file", handle_message))
-    app.add_handler(CommandHandler("download", handle_message))
-    app.add_handler(CommandHandler("d", handle_message))
+
+    # ضروري: استقبال أي نص مش أمر
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
     app.run_polling()
 
