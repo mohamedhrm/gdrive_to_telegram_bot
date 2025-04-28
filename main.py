@@ -99,29 +99,4 @@ async def download_folder(folder_url, context):
 def extract_file_id(url):
     if "id=" in url:
         return url.split("id=")[-1]
-    elif "/d/" in url:
-        return url.split("/d/")[1].split("/")[0]
-
-def extract_folder_id(url):
-    if "folders/" in url:
-        return url.split("folders/")[1].split("?")[0]
-
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", start))
-    app.add_handler(CommandHandler("folder", handle_message))
-    app.add_handler(CommandHandler("file", handle_message))
-    app.add_handler(CommandHandler("download", handle_message))
-    app.add_handler(CommandHandler("d", handle_message))
-
-    app.add_handler(CommandHandler("msg", handle_message))
-
-    app.add_handler(CommandHandler("", handle_message))
-    app.add_handler(CommandHandler("*", handle_message))
-
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+    elif "/d/"
