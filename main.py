@@ -1,47 +1,62 @@
 import os
 import asyncio
-import aiohttp
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import aiofiles
+import gdown
+from telegram import Bot
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = -1002558520064  # اكتب هنا ID القناة اللي قولتلي عليه
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # مثلا "-1002558520064"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أرسل رابط Google Drive أو ملف مباشر!")
+bot = Bot(token=BOT_TOKEN)
 
-async def download_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
+    await update.message.reply_text("ارسل رابط Google Drive وسأقوم بتحميله ورفعه ✅")
+
+async def handle_message(update, context):
     url = update.message.text.strip()
 
-    if not url.startswith("http"):
-        await update.message.reply_text("ارسل لينك صالح.")
+    if not ("drive.google.com" in url):
+        await update.message.reply_text("الرجاء إرسال رابط Google Drive صحيح 📎")
         return
 
-    filename = url.split("/")[-1].split("?")[0]
-    filename = filename.replace("%20", " ")  # تصحيح لو فيه مسافات مرمزة
+    await update.message.reply_text("جاري التحميل من Google Drive... ⏳")
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    file_data = await resp.read()
-                    await context.bot.send_document(
-                        chat_id=CHANNEL_ID,
-                        document=file_data,
-                        filename=filename,
-                        caption=f"تم رفع الملف: {filename}"
-                    )
-                    await update.message.reply_text(f"✅ تم رفع الملف: {filename}")
-                else:
-                    await update.message.reply_text("فشل التحميل، حاول رابط آخر.")
+        # تحديد اسم الملف أو الفولدر
+        output_name = "downloaded_content"
+
+        # تحميل الملف أو الفولدر
+        gdown.download_folder(url, output=output_name, quiet=True, use_cookies=False)
+
+        # رفع كل الملفات
+        for root, dirs, files in os.walk(output_name):
+            for file_name in files:
+                file_path = os.path.join(root, file_name)
+                await upload_file(file_path)
+                os.remove(file_path)
+
+        await update.message.reply_text("تم الرفع بنجاح ✅✅")
+
     except Exception as e:
-        await update.message.reply_text(f"خطأ أثناء التحميل: {e}")
+        await update.message.reply_text(f"حدث خطأ: {e}")
+
+async def upload_file(file_path):
+    async with aiofiles.open(file_path, "rb") as f:
+        file_data = await f.read()
+        await bot.send_document(
+            chat_id=CHANNEL_ID,
+            document=file_data,
+            filename=os.path.basename(file_path),
+            caption="📂 ملف مرفوع من Google Drive"
+        )
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_and_send))
-    app.run_polling()
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-if __name__ == "__main__":
+    application.run_polling()
+
+if __name__ == '__main__':
     main()
