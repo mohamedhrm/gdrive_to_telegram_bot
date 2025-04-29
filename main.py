@@ -1,12 +1,21 @@
 import os
-import requests
+import io
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from bs4 import BeautifulSoup
-import json
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
+# إعداد المتغيرات البيئية
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = os.environ.get("CHANNEL_ID")  # مثال: '-1002558520064'
+CHANNEL_ID = os.environ.get("CHANNEL_ID")
+SERVICE_ACCOUNT_FILE = "/etc/secrets/service_account.json"
+
+# إنشاء خدمة Google Drive
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+creds = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+drive_service = build('drive', 'v3', credentials=creds)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("أرسل رابط Google Drive 📂")
@@ -24,112 +33,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔍 جاري تحميل الملف...")
         await download_file(url, context)
 
-async def download_file(url, context):
-    try:
-        file_id = extract_file_id(url)
-        if not file_id:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ لم أستطع استخراج معرف الملف.")
-            return
-
-        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        session = requests.Session()
-        response = session.get(download_url, stream=True)
-
-        if "Content-Disposition" in response.headers:
-            filename = response.headers["Content-Disposition"].split("filename=")[1].strip("\"'")
-        else:
-            filename = "file_from_drive"
-
-        file_path = os.path.join("/tmp", filename)
-
-        with open(file_path, "wb") as f:
-            for chunk in response.iter_content(1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-
-        await context.bot.send_document(chat_id=CHANNEL_ID, document=open(file_path, "rb"), filename=filename)
-        os.remove(file_path)
-
-    except Exception as e:
-        print("Error downloading file:", e)
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء تحميل الملف.")
-
-async def download_folder(folder_url, context):
-    try:
-        folder_id = extract_folder_id(folder_url)
-        if not folder_id:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ لم أستطع استخراج معرف المجلد.")
-            return
-
-        page_url = f"https://drive.google.com/drive/folders/{folder_id}"
-        session = requests.Session()
-        response = session.get(page_url)
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        scripts = soup.find_all("script")
-
-        files = []
-        data = None
-
-        for script in scripts:
-            if "window['_DRIVE_ivd']" in script.text:
-                start = script.text.find("[[")
-                end = script.text.find("]]") + 2
-                data = script.text[start:end]
-                break
-
-        if not data:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ لم أتمكن من قراءة ملفات المجلد.")
-            return
-
-        # استخراج الملفات
-        data = json.loads(data)
-        for item in data:
-            if len(item) > 3:
-                file_id = item[0]
-                filename = item[2]
-                files.append((file_id, filename))
-
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"📂 تم العثور على {len(files)} ملف داخل المجلد. جاري التحميل...")
-
-        for file_id, filename in files:
-            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            file_path = os.path.join("/tmp", filename)
-            res = session.get(download_url, stream=True)
-
-            with open(file_path, "wb") as f:
-                for chunk in res.iter_content(1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-
-            await context.bot.send_document(chat_id=CHANNEL_ID, document=open(file_path, "rb"), filename=filename)
-            os.remove(file_path)
-
-    except Exception as e:
-        print("Error downloading folder:", e)
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء تحميل المجلد.")
-
 def extract_file_id(url):
     if "id=" in url:
         return url.split("id=")[-1].split("&")[0]
     elif "/d/" in url:
         return url.split("/d/")[1].split("/")[0]
-    else:
-        return None
+    return None
 
 def extract_folder_id(url):
     if "folders/" in url:
         return url.split("folders/")[1].split("?")[0]
-    else:
-        return None
+    return None
+
+async def download_file(url, context):
+    try:
+        file_id = extract_file_id(url)
+        file_metadata = drive_service.files().get(fileId=file_id).execute()
+        filename = file_metadata['name']
+
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+        fh.seek(0)
+        await context.bot.send_document(chat_id=CHANNEL_ID, document=fh, filename=filename)
+
+    except Exception as e:
+        print("Error:", e)
+        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء تحميل الملف.")
+
+async def download_folder(url, context):
+    try:
+        folder_id = extract_folder_id(url)
+        query = f"'{folder_id}' in parents and trashed = false"
+        results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+        items = results.get('files', [])
+
+        if not items:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text="📂 المجلد فارغ أو لا يمكن الوصول إليه.")
+            return
+
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"📁 عدد الملفات: {len(items)}. جاري التحميل...")
+
+        for item in items:
+            file_id = item['id']
+            filename = item['name']
+            request = drive_service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+            fh.seek(0)
+            await context.bot.send_document(chat_id=CHANNEL_ID, document=fh, filename=filename)
+
+    except Exception as e:
+        print("Error:", e)
+        await context.bot.send_message(chat_id=CHANNEL_ID, text="❌ حدث خطأ أثناء تحميل المجلد.")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", start))
-
-    # ضروري: استقبال أي نص مش أمر
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
     app.run_polling()
